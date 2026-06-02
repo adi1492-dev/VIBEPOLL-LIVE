@@ -1,0 +1,6 @@
+{
+  "name": "Live Polling Platform",
+  "description": "A real-time, highly animated, and presenter-friendly live polling and analytics application with QR codes and demographic breakdowns.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
