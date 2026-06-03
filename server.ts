@@ -7,7 +7,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { createClient } from '@libsql/client';
+import { createClient } from '@libsql/client/web';
 import { Poll, PollTemplate, Vote } from './src/types';
 
 const app = express();
@@ -37,8 +37,13 @@ if (isTursoEnabled) {
 }
 
 // File paths for persistence (Local fallback keys)
-const POLLS_FILE = path.join(process.cwd(), 'polls_store.json');
-const TEMPLATES_FILE = path.join(process.cwd(), 'templates_store.json');
+const isVercel = process.env.VERCEL === '1';
+const POLLS_FILE = isVercel 
+  ? path.join('/tmp', 'polls_store.json')
+  : path.join(process.cwd(), 'polls_store.json');
+const TEMPLATES_FILE = isVercel 
+  ? path.join('/tmp', 'templates_store.json')
+  : path.join(process.cwd(), 'templates_store.json');
 
 // Memory storage
 let polls: Record<string, Poll> = {};
