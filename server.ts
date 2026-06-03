@@ -16,11 +16,20 @@ const PORT = 3000;
 app.use(express.json());
 
 // Turso SQLite configuration
-const dbUrl = process.env.TURSO_DATABASE_URL;
-const dbToken = process.env.TURSO_AUTH_TOKEN;
+const dbUrl = process.env.TURSO_DATABASE_URL?.trim();
+const dbToken = process.env.TURSO_AUTH_TOKEN?.trim();
 
 const isTursoEnabled = !!(dbUrl && dbToken);
-const db = isTursoEnabled ? createClient({ url: dbUrl!, authToken: dbToken! }) : null;
+let db: any = null;
+
+if (isTursoEnabled) {
+  try {
+    db = createClient({ url: dbUrl!, authToken: dbToken! });
+    console.log('Successfully initialized Turso database client.');
+  } catch (err) {
+    console.error('❌ Failed to construct Turso database client (possible URL/Token format error):', err);
+  }
+}
 
 // File paths for persistence (Local fallback keys)
 const POLLS_FILE = path.join(process.cwd(), 'polls_store.json');

@@ -211,11 +211,23 @@ export const PollCreate: React.FC<PollCreateProps> = ({ onPollCreated }) => {
         const createdPoll = await response.json();
         onPollCreated(createdPoll);
       } else {
-        const errorData = await response.json();
-        setErrorMessage(errorData.error || 'Failed to create poll on server.');
+        let errorMsg = 'Failed to create poll on server.';
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error || errorMsg;
+        } catch (jsonErr) {
+          try {
+            const rawText = await response.text();
+            errorMsg = `Server error (${response.status}): ${rawText.substring(0, 250)}`;
+          } catch (textErr) {
+            errorMsg = `Server error (${response.status})`;
+          }
+        }
+        setErrorMessage(errorMsg);
       }
     } catch (err) {
-      setErrorMessage('Network connection error. Server might be launching...');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(`Failed to create poll: ${errMsg}`);
       console.error(err);
     } finally {
       setIsSubmittingPoll(false);
@@ -258,11 +270,24 @@ export const PollCreate: React.FC<PollCreateProps> = ({ onPollCreated }) => {
         setShowSaveTemplateModal(false);
         await fetchTemplates();
       } else {
-        setErrorMessage('Failed to save template on backend.');
+        let errorMsg = 'Failed to save template on backend.';
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error || errorMsg;
+        } catch (jsonErr) {
+          try {
+            const rawText = await response.text();
+            errorMsg = `Server error (${response.status}): ${rawText.substring(0, 250)}`;
+          } catch (textErr) {
+            errorMsg = `Server error (${response.status})`;
+          }
+        }
+        setErrorMessage(errorMsg);
       }
     } catch (err) {
       console.error(err);
-      setErrorMessage('Error saving template to server.');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(`Error saving template: ${errMsg}`);
     } finally {
       setIsSavingTemplate(false);
     }
