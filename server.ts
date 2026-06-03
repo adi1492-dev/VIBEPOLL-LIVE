@@ -15,6 +15,11 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Helper wrapper to safely catch async errors in Express 4 routes and pass them to the global error handler middleware
+const asyncHandler = (fn: any) => (req: any, res: any, next: any) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
 // Turso SQLite configuration
 const dbUrl = process.env.TURSO_DATABASE_URL?.trim();
 const dbToken = process.env.TURSO_AUTH_TOKEN?.trim();
@@ -496,7 +501,7 @@ function broadcastPollUpdate(pollId: string, updatedPoll: Poll) {
 }
 
 // SSE Connection Endpoint
-app.get('/api/polls/:id/stream', async (req, res) => {
+app.get('/api/polls/:id/stream', asyncHandler(async (req: any, res: any) => {
   const pollId = req.params.id;
   const poll = await dbGetPoll(pollId);
   
@@ -544,10 +549,10 @@ app.get('/api/polls/:id/stream', async (req, res) => {
     sseClients.set(pollId, updatedList);
     res.end();
   });
-});
+}));
 
 // GET list of active polls
-app.get('/api/polls', async (req, res) => {
+app.get('/api/polls', asyncHandler(async (req: any, res: any) => {
   const allPolls = await dbGetPolls();
   let changed = false;
   for (const poll of allPolls) {
@@ -558,10 +563,10 @@ app.get('/api/polls', async (req, res) => {
   }
   const result = changed ? await dbGetPolls() : allPolls;
   res.json(result);
-});
+}));
 
 // GET poll details
-app.get('/api/polls/:id', async (req, res) => {
+app.get('/api/polls/:id', asyncHandler(async (req: any, res: any) => {
   const poll = await dbGetPoll(req.params.id);
   if (!poll) {
     res.status(404).json({ error: 'Poll not found' });
@@ -572,10 +577,10 @@ app.get('/api/polls/:id', async (req, res) => {
     broadcastPollUpdate(poll.id, poll);
   }
   res.json(poll);
-});
+}));
 
 // CREATE a new poll
-app.post('/api/polls', async (req, res) => {
+app.post('/api/polls', asyncHandler(async (req: any, res: any) => {
   const { question, options, timer, demographics, theme, quizMode, correctOptionId, imageUrl } = req.body;
   
   if (!question || !options || !Array.isArray(options) || options.length < 2) {
@@ -605,10 +610,10 @@ app.post('/api/polls', async (req, res) => {
 
   await dbSavePoll(newPoll);
   res.status(201).json(newPoll);
-});
+}));
 
 // START / LAUNCH a poll (begins the countdown)
-app.post('/api/polls/:id/launch', async (req, res) => {
+app.post('/api/polls/:id/launch', asyncHandler(async (req: any, res: any) => {
   const poll = await dbGetPoll(req.params.id);
   if (!poll) {
     res.status(404).json({ error: 'Poll not found' });
@@ -625,10 +630,10 @@ app.post('/api/polls/:id/launch', async (req, res) => {
   await dbSavePoll(poll);
   broadcastPollUpdate(poll.id, poll);
   res.json(poll);
-});
+}));
 
 // RESET a poll to let visitors vote again (resets votes and resets to draft/clean status)
-app.post('/api/polls/:id/reset', async (req, res) => {
+app.post('/api/polls/:id/reset', asyncHandler(async (req: any, res: any) => {
   const poll = await dbGetPoll(req.params.id);
   if (!poll) {
     res.status(404).json({ error: 'Poll not found' });
@@ -641,10 +646,10 @@ app.post('/api/polls/:id/reset', async (req, res) => {
   await dbSavePoll(poll);
   broadcastPollUpdate(poll.id, poll);
   res.json(poll);
-});
+}));
 
 // RECORD a new vote
-app.post('/api/polls/:id/vote', async (req, res) => {
+app.post('/api/polls/:id/vote', asyncHandler(async (req: any, res: any) => {
   const pollId = req.params.id;
   const poll = await dbGetPoll(pollId);
   if (!poll) {
@@ -706,10 +711,10 @@ app.post('/api/polls/:id/vote', async (req, res) => {
   broadcastPollUpdate(pollId, poll);
   
   res.status(201).json({ success: true, poll });
-});
+}));
 
 // DELETE a poll
-app.delete('/api/polls/:id', async (req, res) => {
+app.delete('/api/polls/:id', asyncHandler(async (req: any, res: any) => {
   const pollId = req.params.id;
   const deleted = await dbDeletePoll(pollId);
   if (!deleted) {
@@ -717,16 +722,16 @@ app.delete('/api/polls/:id', async (req, res) => {
     return;
   }
   res.json({ success: true, message: 'Poll deleted successfully' });
-});
+}));
 
 // GET dynamic templates
-app.get('/api/templates', async (req, res) => {
+app.get('/api/templates', asyncHandler(async (req: any, res: any) => {
   const list = await dbGetTemplates();
   res.json(list);
-});
+}));
 
 // SAVE poll as template
-app.post('/api/templates', async (req, res) => {
+app.post('/api/templates', asyncHandler(async (req: any, res: any) => {
   const { name, question, options, timer, demographics, quizMode, correctOptionIdIndex, theme } = req.body;
   if (!name || !question || !options || !Array.isArray(options) || options.length < 2) {
     res.status(400).json({ error: 'Template name, question, and at least 2 options are required.' });
@@ -748,7 +753,7 @@ app.post('/api/templates', async (req, res) => {
 
   await dbSaveTemplate(newTemplate);
   res.status(201).json(newTemplate);
-});
+}));
 
 // Clean up finished streams checker
 setInterval(async () => {
@@ -767,6 +772,14 @@ setInterval(async () => {
   }
 }, 2000);
 
+// Global Error Handling Middleware
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('💥 Express Error Caught:', err);
+  res.status(500).json({
+    error: err.message || 'Internal Server Error',
+    stack: err.stack
+  });
+});
 
 // START DEV & PROD SERVERS SETUP
 async function startServer() {
