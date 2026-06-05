@@ -83,36 +83,67 @@ export const PollVoter: React.FC<PollVoterProps> = ({ pollId }) => {
         console.error(err);
       });
 
-    // Connect Server Sent Events
-    const eventSource = new EventSource(`/api/polls/${pollId}/stream`);
+    // Connect Server Sent Events with Long-Polling Fallback for Serverless
+    let eventSource: EventSource | null = null;
+    let intervalId: NodeJS.Timeout | null = null;
 
-    eventSource.onopen = () => {
-      setIsConnected(true);
-      setErrorText('');
-    };
+    function connectSSE() {
+      eventSource = new EventSource(`/api/polls/${pollId}/stream`);
 
-    eventSource.onmessage = (event) => {
-      try {
-        const updatedPoll: Poll = JSON.parse(event.data);
-        setPoll(updatedPoll);
+      eventSource.onopen = () => {
+        setIsConnected(true);
+        setErrorText('');
+      };
 
-        // Update voted status if another client stream synced
-        const userVote = updatedPoll.votes.find((v) => v.fingerprint === fingerprint);
-        if (userVote) {
-          setVotedOptionId(userVote.optionId);
+      eventSource.onmessage = (event) => {
+        try {
+          const updatedPoll: Poll = JSON.parse(event.data);
+          setPoll(updatedPoll);
+
+          // Update voted status if another client stream synced
+          const userVote = updatedPoll.votes.find((v) => v.fingerprint === fingerprint);
+          if (userVote) {
+            setVotedOptionId(userVote.optionId);
+          }
+        } catch (err) {
+          console.error('Error parsing sse JSON payload:', err);
         }
-      } catch (err) {
-        console.error('Error parsing sse JSON payload:', err);
-      }
-    };
+      };
 
-    eventSource.onerror = () => {
-      setIsConnected(false);
-      // EventSource auto reconnects, so let's just show minimal status
-    };
+      eventSource.onerror = () => {
+        console.warn('SSE disconnected. Re-routing client fallback to long-polling...');
+        setIsConnected(false);
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+
+        if (!intervalId) {
+          intervalId = setInterval(async () => {
+            try {
+              const res = await fetch(`/api/polls/${pollId}`);
+              if (res.ok) {
+                const updatedPoll: Poll = await res.json();
+                setPoll(updatedPoll);
+
+                const userVote = updatedPoll.votes.find((v) => v.fingerprint === fingerprint);
+                if (userVote) {
+                  setVotedOptionId(userVote.optionId);
+                }
+              }
+            } catch (err) {
+              console.error('Poller failed:', err);
+            }
+          }, 2500);
+        }
+      };
+    }
+
+    connectSSE();
 
     return () => {
-      eventSource.close();
+      if (eventSource) eventSource.close();
+      if (intervalId) clearInterval(intervalId);
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [pollId, fingerprint]);

@@ -67,30 +67,66 @@ export const PollPresenter: React.FC<PollPresenterProps> = ({ pollId, onBack }) 
       })
       .catch((err) => console.error('Error fetching poll:', err));
 
-    // Connect SSE Stream
-    const eventSource = new EventSource(`/api/polls/${pollId}/stream`);
+    // Connect SSE Stream with Long-Polling Fallback for Serverless
+    let eventSource: EventSource | null = null;
+    let intervalId: NodeJS.Timeout | null = null;
 
-    eventSource.onopen = () => {
-      setIsConnected(true);
-    };
+    function connectSSE() {
+      eventSource = new EventSource(`/api/polls/${pollId}/stream`);
+      
+      eventSource.onopen = () => {
+        setIsConnected(true);
+      };
 
-    eventSource.onmessage = (event) => {
-      try {
-        const updatedPoll: Poll = JSON.parse(event.data);
-        setPoll((prev) => {
-          // If the poll status just transitioned from active to ended, trigger confetti
-          if (prev && prev.status === 'active' && updatedPoll.status === 'ended') {
-            setConfettiActive(true);
-          }
-          return updatedPoll;
-        });
-      } catch (err) {
-        console.error('Error parsing SSE json:', err);
-      }
-    };
+      eventSource.onmessage = (event) => {
+        try {
+          const updatedPoll: Poll = JSON.parse(event.data);
+          setPoll((prev) => {
+            // If the poll status just transitioned from active to ended, trigger confetti
+            if (prev && prev.status === 'active' && updatedPoll.status === 'ended') {
+              setConfettiActive(true);
+            }
+            return updatedPoll;
+          });
+        } catch (err) {
+          console.error('Error parsing SSE json:', err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        console.warn('SSE disconnected. Re-routing client fallback to long-polling...');
+        setIsConnected(false);
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        
+        if (!intervalId) {
+          intervalId = setInterval(async () => {
+            try {
+              const res = await fetch(`/api/polls/${pollId}`);
+              if (res.ok) {
+                const updatedPoll: Poll = await res.json();
+                setPoll((prev) => {
+                  if (prev && prev.status === 'active' && updatedPoll.status === 'ended') {
+                    setConfettiActive(true);
+                  }
+                  return updatedPoll;
+                });
+              }
+            } catch (err) {
+              console.error('Poller failed:', err);
+            }
+          }, 2500);
+        }
+      };
+    }
+
+    connectSSE();
 
     return () => {
-      eventSource.close();
+      if (eventSource) eventSource.close();
+      if (intervalId) clearInterval(intervalId);
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [pollId]);
