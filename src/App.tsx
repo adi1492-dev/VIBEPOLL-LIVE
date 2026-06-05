@@ -17,7 +17,7 @@ import { Poll } from './types';
 import { PollCreate } from './components/PollCreate';
 import { PollPresenter } from './components/PollPresenter';
 import { PollVoter } from './components/PollVoter';
-import { AdminLogin } from './components/AdminLogin';
+import { AuthForm } from './components/AuthForm';
 
 export default function App() {
   const [currentSection, setCurrentSection] = useState<'landing' | 'login' | 'dashboard' | 'presenter' | 'creator' | 'voter'>('landing');
@@ -57,7 +57,10 @@ export default function App() {
     setIsLoading(true);
     setErrorText('');
     try {
-      const response = await fetch('/api/polls');
+      const token = localStorage.getItem('vibepoll_admin_token');
+      const response = await fetch('/api/polls', {
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+      });
       if (response.ok) {
         const data = await response.json();
         // Sort descending by creation date
@@ -78,7 +81,11 @@ export default function App() {
     if (!confirm(`Are you sure you want to permanently delete poll "${question}"?`)) return;
     
     try {
-      const response = await fetch(`/api/polls/${id}`, { method: 'DELETE' });
+      const token = localStorage.getItem('vibepoll_admin_token');
+      const response = await fetch(`/api/polls/${id}`, { 
+        method: 'DELETE',
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+      });
       if (response.ok) {
         await fetchActivePolls();
       } else {
@@ -300,8 +307,8 @@ export default function App() {
         )}
 
         {currentSection === 'login' && (
-          <AdminLogin 
-            onLoginSuccess={() => {
+          <AuthForm 
+            onAuthSuccess={() => {
               setIsAuthenticated(true);
               setCurrentSection('dashboard');
               fetchActivePolls();

@@ -6,6 +6,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { createClient } from '@libsql/client/web';
 import { Poll, PollTemplate, Vote } from './src/types';
 
@@ -177,6 +178,17 @@ async function initTurso() {
   }
   console.log('Initializing Turso cloud Database schema tables...');
   try {
+    // 0. Users Table
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        token TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `);
+
     // 1. Polls Table
     await db.execute(`
       CREATE TABLE IF NOT EXISTS polls (
@@ -189,9 +201,16 @@ async function initTurso() {
         theme TEXT NOT NULL DEFAULT 'indigo',
         quizMode INTEGER NOT NULL DEFAULT 0,
         correctOptionId TEXT,
-        imageUrl TEXT
+        imageUrl TEXT,
+        user_id TEXT
       );
     `);
+
+    try {
+      await db.execute('ALTER TABLE polls ADD COLUMN user_id TEXT;');
+    } catch (e) {
+      // Ignore if column already exists
+    }
 
     // 2. Options Table
     await db.execute(`
@@ -285,6 +304,7 @@ async function dbGetPoll(id: string): Promise<Poll | null> {
         quizMode: Boolean(row.quizMode),
         correctOptionId: (row.correctOptionId as string) || null,
         imageUrl: (row.imageUrl as string) || null,
+        userId: (row.user_id as string) || undefined,
         demographics: demoRs.rows.map(r => ({
           id: r.id as string,
           name: r.name as string,
@@ -306,10 +326,15 @@ async function dbGetPoll(id: string): Promise<Poll | null> {
   return polls[id] || null;
 }
 
-async function dbGetPolls(): Promise<Poll[]> {
+async function dbGetPolls(userId?: string): Promise<Poll[]> {
   if (db) {
     try {
-      const rs = await db.execute('SELECT id FROM polls ORDER BY createdAt DESC');
+      let rs;
+      if (userId) {
+        rs = await db.execute({ sql: 'SELECT id FROM polls WHERE user_id = ? ORDER BY createdAt DESC', args: [userId] });
+      } else {
+        rs = await db.execute('SELECT id FROM polls ORDER BY createdAt DESC');
+      }
       const list: Poll[] = [];
       for (const row of rs.rows) {
         const poll = await dbGetPoll(row.id as string);
@@ -331,12 +356,13 @@ async function dbSavePoll(poll: Poll): Promise<void> {
   if (db) {
     try {
       await db.execute({
-        sql: `INSERT INTO polls (id, question, timer, createdAt, expiresAt, status, theme, quizMode, correctOptionId, imageUrl)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sql: `INSERT INTO polls (id, question, timer, createdAt, expiresAt, status, theme, quizMode, correctOptionId, imageUrl, user_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 expiresAt = excluded.expiresAt,
-                correctOptionId = excluded.correctOptionId`,
+                correctOptionId = excluded.correctOptionId,
+                user_id = excluded.user_id`,
         args: [
           poll.id,
           poll.question,
@@ -347,7 +373,8 @@ async function dbSavePoll(poll: Poll): Promise<void> {
           poll.theme,
           poll.quizMode ? 1 : 0,
           poll.correctOptionId,
-          poll.imageUrl
+          poll.imageUrl,
+          poll.userId || null
         ]
       });
 
@@ -555,9 +582,40 @@ app.get('/api/polls/:id/stream', asyncHandler(async (req: any, res: any) => {
   });
 }));
 
-// GET list of active polls
-app.get('/api/polls', asyncHandler(async (req: any, res: any) => {
-  const allPolls = await dbGetPolls();
+// --- AUTH LAYER ---
+function hashPassword(password: string) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, storedHash: string) {
+  const [salt, key] = storedHash.split(':');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return key === hash;
+}
+
+const requireAuth = asyncHandler(async (req: any, res: any, next: any) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = authHeader.split(' ')[1];
+  
+  if (db) {
+    const rs = await db.execute({ sql: 'SELECT id, email FROM users WHERE token = ?', args: [token] });
+    if (rs.rows.length === 0) return res.status(401).json({ error: 'Invalid token' });
+    req.user = { id: rs.rows[0].id, email: rs.rows[0].email };
+  } else {
+    // In-memory bypass fallback
+    req.user = { id: 'local-user', email: 'local@example.com' };
+  }
+  next();
+});
+
+// GET list of active polls for user
+app.get('/api/polls', requireAuth, asyncHandler(async (req: any, res: any) => {
+  const allPolls = await dbGetPolls(req.user.id);
   let changed = false;
   for (const poll of allPolls) {
     if (checkPollExpiry(poll)) {
@@ -565,7 +623,7 @@ app.get('/api/polls', asyncHandler(async (req: any, res: any) => {
       changed = true;
     }
   }
-  const result = changed ? await dbGetPolls() : allPolls;
+  const result = changed ? await dbGetPolls(req.user.id) : allPolls;
   res.json(result);
 }));
 
@@ -584,7 +642,7 @@ app.get('/api/polls/:id', asyncHandler(async (req: any, res: any) => {
 }));
 
 // CREATE a new poll
-app.post('/api/polls', asyncHandler(async (req: any, res: any) => {
+app.post('/api/polls', requireAuth, asyncHandler(async (req: any, res: any) => {
   const { question, options, timer, demographics, theme, quizMode, correctOptionId, imageUrl } = req.body;
   
   if (!question || !options || !Array.isArray(options) || options.length < 2) {
@@ -609,7 +667,8 @@ app.post('/api/polls', asyncHandler(async (req: any, res: any) => {
     theme: theme || 'indigo',
     quizMode: !!quizMode,
     correctOptionId: correctOptionId || null,
-    imageUrl: imageUrl || null
+    imageUrl: imageUrl || null,
+    userId: req.user.id
   };
 
   await dbSavePoll(newPoll);
@@ -617,7 +676,7 @@ app.post('/api/polls', asyncHandler(async (req: any, res: any) => {
 }));
 
 // START / LAUNCH a poll (begins the countdown)
-app.post('/api/polls/:id/launch', asyncHandler(async (req: any, res: any) => {
+app.post('/api/polls/:id/launch', requireAuth, asyncHandler(async (req: any, res: any) => {
   const poll = await dbGetPoll(req.params.id);
   if (!poll) {
     res.status(404).json({ error: 'Poll not found' });
@@ -637,7 +696,7 @@ app.post('/api/polls/:id/launch', asyncHandler(async (req: any, res: any) => {
 }));
 
 // RESET a poll to let visitors vote again (resets votes and resets to draft/clean status)
-app.post('/api/polls/:id/reset', asyncHandler(async (req: any, res: any) => {
+app.post('/api/polls/:id/reset', requireAuth, asyncHandler(async (req: any, res: any) => {
   const poll = await dbGetPoll(req.params.id);
   if (!poll) {
     res.status(404).json({ error: 'Poll not found' });
@@ -718,7 +777,7 @@ app.post('/api/polls/:id/vote', asyncHandler(async (req: any, res: any) => {
 }));
 
 // DELETE a poll
-app.delete('/api/polls/:id', asyncHandler(async (req: any, res: any) => {
+app.delete('/api/polls/:id', requireAuth, asyncHandler(async (req: any, res: any) => {
   const pollId = req.params.id;
   const deleted = await dbDeletePoll(pollId);
   if (!deleted) {
@@ -759,17 +818,55 @@ app.post('/api/templates', asyncHandler(async (req: any, res: any) => {
   res.status(201).json(newTemplate);
 }));
 
-// ADMIN LOGIN
-app.post('/api/auth/login', asyncHandler(async (req: any, res: any) => {
-  const { password } = req.body;
-  const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+// MULTI-USER AUTHENTICATION ROUTES
+app.post('/api/auth/register', asyncHandler(async (req: any, res: any) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   
-  if (password === adminPassword) {
-    res.json({ success: true, token: 'vibepoll-admin-token-v1' });
+  if (db) {
+    const existing = await db.execute({ sql: 'SELECT id FROM users WHERE email = ?', args: [email] });
+    if (existing.rows.length > 0) return res.status(400).json({ error: 'Email already registered' });
+    
+    const userId = crypto.randomUUID();
+    const token = crypto.randomBytes(32).toString('hex');
+    const hash = hashPassword(password);
+    
+    await db.execute({
+      sql: 'INSERT INTO users (id, email, password_hash, token, created_at) VALUES (?, ?, ?, ?, ?)',
+      args: [userId, email, hash, token, Date.now()]
+    });
+    
+    res.json({ success: true, token, user: { id: userId, email } });
   } else {
-    res.status(401).json({ error: 'Invalid admin password' });
+    res.json({ success: true, token: 'mock-token', user: { id: 'local-user', email } });
   }
 }));
+
+app.post('/api/auth/login', asyncHandler(async (req: any, res: any) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+  
+  if (db) {
+    const rs = await db.execute({ sql: 'SELECT id, email, password_hash FROM users WHERE email = ?', args: [email] });
+    if (rs.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+    
+    const user = rs.rows[0];
+    if (!verifyPassword(password, user.password_hash as string)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const token = crypto.randomBytes(32).toString('hex');
+    await db.execute({ sql: 'UPDATE users SET token = ? WHERE id = ?', args: [token, user.id] });
+    
+    res.json({ success: true, token, user: { id: user.id, email: user.email } });
+  } else {
+    res.json({ success: true, token: 'mock-token', user: { id: 'local-user', email } });
+  }
+}));
+
+app.get('/api/auth/me', requireAuth, (req: any, res: any) => {
+  res.json({ user: req.user });
+});
 
 // Clean up finished streams checker
 setInterval(async () => {

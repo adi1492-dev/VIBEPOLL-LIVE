@@ -37,6 +37,7 @@ export interface Poll {
   quizMode: boolean;
   correctOptionId: string | null;
   imageUrl: string | null;
+  userId?: string;
 }
 
 export interface PollTemplate {

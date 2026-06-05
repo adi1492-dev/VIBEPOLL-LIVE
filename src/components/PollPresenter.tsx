@@ -172,7 +172,11 @@ export const PollPresenter: React.FC<PollPresenterProps> = ({ pollId, onBack }) 
   // Action: Launch the countdown timer
   const handleLaunchPoll = async () => {
     try {
-      const res = await fetch(`/api/polls/${pollId}/launch`, { method: 'POST' });
+      const token = localStorage.getItem('vibepoll_admin_token');
+      const res = await fetch(`/api/polls/${pollId}/launch`, { 
+        method: 'POST',
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+      });
       if (res.ok) {
         const updatedPoll = await res.json();
         setPoll(updatedPoll);
@@ -189,7 +193,11 @@ export const PollPresenter: React.FC<PollPresenterProps> = ({ pollId, onBack }) 
     setSelectedDemographicFilter('All');
     setSelectedDemoValueFilter('All');
     try {
-      const res = await fetch(`/api/polls/${pollId}/reset`, { method: 'POST' });
+      const token = localStorage.getItem('vibepoll_admin_token');
+      const res = await fetch(`/api/polls/${pollId}/reset`, { 
+        method: 'POST',
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+      });
       if (res.ok) {
         const updatedPoll = await res.json();
         setPoll(updatedPoll);

@@ -70,7 +70,10 @@ export const PollCreate: React.FC<PollCreateProps> = ({ onPollCreated }) => {
 
   const fetchTemplates = async () => {
     try {
-      const response = await fetch('/api/templates');
+      const token = localStorage.getItem('vibepoll_admin_token');
+      const response = await fetch('/api/templates', {
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+      });
       if (response.ok) {
         const data = await response.json();
         setTemplates(data);
@@ -192,9 +195,13 @@ export const PollCreate: React.FC<PollCreateProps> = ({ onPollCreated }) => {
     setIsSubmittingPoll(true);
 
     try {
+      const token = localStorage.getItem('vibepoll_admin_token');
       const response = await fetch('/api/polls', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           question: question.trim(),
           options: filteredOptions,
@@ -250,9 +257,13 @@ export const PollCreate: React.FC<PollCreateProps> = ({ onPollCreated }) => {
 
     setIsSavingTemplate(true);
     try {
+      const token = localStorage.getItem('vibepoll_admin_token');
       const response = await fetch('/api/templates', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           name: templateName.trim(),
           question: question.trim() || 'Untitled Question',
