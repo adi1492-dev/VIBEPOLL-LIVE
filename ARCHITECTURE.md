@@ -1,92 +1,51 @@
-# Live Polling Real-Time Architecture
+# Architecture & System Design
 
-This document describes the architectural choices, real-time sync systems, scale optimizations, and data pipelines built for the live polling platform.
+This document details the thought process, structural decisions, and data flows engineered for VibePoll Live.
 
----
+## 1. High-Level Architecture Overview
 
-## Technical Overview
+VibePoll utilizes a "monolithic SPA" architecture served by an Express backend, designed to gracefully deploy to restrictive environments like Vercel Serverless Functions.
 
-The application is implemented as a cohesive **Full-Stack, Multi-Device, Real-Time Polling Platform** built on the following technologies:
-- **Frontend Core**: React 19, TypeScript, and Tailwind CSS.
-- **Micro-Animations**: Framer Motion (`motion/react`) for fluid progressive elements.
-- **Charts Generation**: Customized responsive SVG graphs providing rich sorted visual animations.
-- **Backend Hub**: Node.js, Express, and `tsx` running the backend on port 3000.
-- **Real-Time Data Layer**: Server-Sent Events (SSE) native streams combined with EventSource listeners.
-- **Persistent Data Storage**: File-based JSON records ensuring simple backups and session recovery.
+- **Client**: A React Single Page Application (SPA) providing separate experiences for the landing page, voter application, and the authenticated organizer dashboard.
+- **API/Server**: An Express.js backend handling REST mutations (Create, Vote, Delete) and real-time streams.
+- **Database**: Turso (Cloud edge SQLite) to persist users, polls, options, and vote records.
 
----
+## 2. Real-Time Update Approach
 
-## Real-Time Update Strategy: server-sent events (SSE)
+The core requirement of the application is sub-second synchronization of votes across hundreds of clients. 
 
-Instead of introducing heavyweight protocols (e.g. customized WebSockets with complex handshake code), we designed the real-time syncing mechanism around **Server-Sent Events (SSE)**. 
+### Why Server-Sent Events (SSE)?
+While WebSockets allow bidirectional real-time communication, they require persistent stateful socket connections. Polling systems only require **unidirectional** updates (Server -> Client). SSE uses standard HTTP, making it significantly easier to proxy through CDNs, firewalls, and requires less infrastructure overhead than a WebSocket fleet.
 
-### Why SSE over WebSockets:
-1. **Unidirectional Synchronization Flow**:
-   - Voters post mutations up to the server via atomic REST calls (`POST /api/polls/:id/vote`). These are standard stateless HTTP requests, making them incredibly resilient.
-   - Presenters and voters only need to listen/stream state down from the server.
-   2. **Native Resilience, Reconnects, & Simplicity**:
-   - Browsers have a built-in standard `EventSource` client which natively handles automatic back-off reconnects and connection keeping with no third-party libraries.
-   - Bypasses traditional enterprise WebSocket proxies or sandbox ingress blocking, executing cleanly over standard HTTP/S port 3000.
-3. **Low Latency & High Scale**:
-   - Each vote translates to a backend state update which immediately triggers an active map callback, broadcasting the updated poll payload representation to all active stream listening responses in <3ms.
-   - Under heavy concurrent loads (e.g., 500+ voters on a single poll), SSE connections are extremely lightweight, utilizing simple text streams without socket wrapper overhead.
+**The Workflow:**
+1. A Presenter opens `/api/polls/:id/stream`. The Express server holds the connection open (`Connection: keep-alive`) and adds the response stream to a memory mapping.
+2. A Voter submits an HTTP POST to `/api/polls/:id/vote`.
+3. The Express server writes the vote to the Turso database.
+4. Instantly, the Express server iterates through all active SSE response streams mapped to that `pollId` and writes the updated JSON state.
+5. The React clients receive the JSON payload and re-render the Animated Charts.
 
-```
- [ Voter A (Phone) ] ---(POST Vote Choice)---> [ Express Backend Hub (Port 3000) ]
-                                                            |
-                                                 (Atomic State Broadcaster)
-                                                            |
-                                                            v
- [ Speaker / Slides ] <---(SSE Stream JSON)-----------------+
- [ Voter B (Phone)  ] <---(SSE Stream JSON)-----------------+
-```
+### Dealing with Serverless Constraints (Vercel)
+Vercel's serverless functions strictly kill connections after a timeout (often 10-60s) and do not support long-lived persistent streaming connections globally.
+To bypass this constraint seamlessly:
+1. The frontend attempts to establish the SSE stream.
+2. If the connection drops or the browser throws an `onerror` on the `EventSource`, the frontend catches this failure.
+3. It immediately gracefully falls back to **Smart Long-Polling**, executing a standard HTTP GET `/api/polls/:id` every 2.5 seconds.
+This guarantees the app remains perfectly real-time during local dev or stateful hosting (Render, Heroku), but still functions flawlessly on aggressive serverless hosts like Vercel.
 
----
+## 3. Storage and Data Model
 
-## Multi-Device Scalability & Constraints
+Turso (LibSQL edge SQLite) was chosen because it allows rapid local development with zero setup, but scales gracefully to edge nodes globally for fast-read operations during massive simultaneous voting.
 
-The system adheres strictly to the core resource constraints:
+**Database Entities:**
+- `users`: Hashed passwords and secure auth tokens for organizers.
+- `polls`: Contains timer metadata, themes, and configuration flags. Relates to `users` via `user_id`.
+- `options`: 1-to-many relationship tracking the individual text answers available for a poll.
+- `votes`: 1-to-many relationship mapping voter fingerprints to option choices. Also records the ms response time latency and JSON serialized demographic configurations.
+- `poll_demographics`: Stores custom fields the organizer requires before a voter can submit.
 
-### 1. Zero-Login Mobile-First Voters
-- Voters require no authentication to vote.
-- On first visit, a unique device fingerprint (cryptographically random UUID) is stored in the browser's `localStorage` (`poll_voter_fingerprint_v1`).
-- The Express server validates each payload fingerprint against the poll's `votes` list. Any subsequent attempt to vote triggers a `409 Conflict` database exception, protecting the integrity of classroom results.
+## 4. Concurrency and Rate Limits
 
-### 2. Low-latency Countdown Clocks
-- Timers are authoritative. The backend calculates `expiresAt` (Current Time + Timer duration in MS) when launched.
-- Clients run simple, high-frequency, non-drift intervals which compare the server's sync timestamp against local clock epoch.
-- If the countdown hits 0 locally, status is set to `'ended'` and subsequent choices are safely blacklisted on the Express controller.
-
-### 3. Progressive Charts
-- Re-rendering heavy charting libraries on every single vote causes visible page flickering and component lag.
-- To prevent this, charts are rendered via reactive SVG arcs and progressive Tailwind divs. Using Framer Motion, layout transitions and bar scale vectors are calculated smoothly on the main thread, resulting in a responsive presentation experience.
-
----
-
-## Dynamic Schema Definition
-
-### Poll Object Model
-```typescript
-interface Poll {
-  id: string;
-  question: string;
-  options: { id: string; text: string }[];
-  timer: number;                         // Duration in seconds
-  createdAt: number;                     // Timestamp in ms
-  expiresAt: number | null;               // Authorization threshold
-  status: 'draft' | 'active' | 'ended';
-  demographics: { id: string; name: string; options: string[] }[];
-  votes: {
-    id: string;
-    optionId: string;
-    timestamp: number;
-    fingerprint: string;
-    demographics: Record<string, string>; // Category tracking
-    responseTimeMs: number;
-  }[];
-  theme: 'indigo' | 'coral' | 'emerald' | 'amber' | 'slate' | 'cyber';
-  quizMode: boolean;                     // Trivia game setting
-  correctOptionId: string | null;
-  imageUrl: string | null;               // Embedded banner illustration
-}
-```
+To support 500+ concurrent voters:
+1. **Device Fingerprinting**: Voters are prevented from voting twice via a locally generated unique fingerprint (`localStorage`). This bypasses the need for an expensive global authentication check. 
+2. **Conflict Avoidance**: The database executes fast inserts on the `votes` table. The aggregate charting is computed on the frontend client (offloading computation away from the server). The server simply serializes the raw DB rows and ships them via SSE.
+3. **Database Fallback**: If the system detects a missing `TURSO_DATABASE_URL`, the server will gracefully fallback to an ephemeral in-memory dictionary. This prevents application crashes on misconfigured edge deployments.
