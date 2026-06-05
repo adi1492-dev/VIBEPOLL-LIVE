@@ -1,51 +1,54 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
   Tv, 
   Trash2, 
-  Settings, 
   BarChart3, 
   Compass, 
   Vote as VoteIcon,
   Layers, 
-  Calendar, 
-  FileCheck,
-  UserCheck, 
   RefreshCw,
   Clock,
   Sparkles,
-  BookOpen
+  BookOpen,
+  ArrowRight
 } from 'lucide-react';
 import { Poll } from './types';
 import { PollCreate } from './components/PollCreate';
 import { PollPresenter } from './components/PollPresenter';
 import { PollVoter } from './components/PollVoter';
+import { AdminLogin } from './components/AdminLogin';
 
 export default function App() {
-  const [currentSection, setCurrentSection] = useState<'dashboard' | 'presenter' | 'creator' | 'voter'>('dashboard');
+  const [currentSection, setCurrentSection] = useState<'landing' | 'login' | 'dashboard' | 'presenter' | 'creator' | 'voter'>('landing');
   const [voterPollId, setVoterPollId] = useState<string | null>(null);
   const [selectedPollId, setSelectedPollId] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [joinPollIdInput, setJoinPollIdInput] = useState('');
   
   // Dashboard poll storage
   const [polls, setPolls] = useState<Poll[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
-  // 1. Detect voter routing or dashboard loading
+  // 1. Detect voter routing, auth check, or landing load
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const vId = params.get('voterId') || params.get('vId');
     
+    const token = localStorage.getItem('vibepoll_admin_token');
+    if (token) {
+      setIsAuthenticated(true);
+    }
+    
     if (vId) {
       setVoterPollId(vId);
       setCurrentSection('voter');
-    } else {
+    } else if (token) {
+      setCurrentSection('dashboard');
       fetchActivePolls();
+    } else {
+      setCurrentSection('landing');
     }
   }, []);
 
@@ -105,8 +108,12 @@ export default function App() {
     // Reset query parameters cleanly
     window.history.pushState({}, '', window.location.origin);
     setVoterPollId(null);
-    setCurrentSection('dashboard');
-    fetchActivePolls();
+    if (isAuthenticated) {
+      setCurrentSection('dashboard');
+      fetchActivePolls();
+    } else {
+      setCurrentSection('landing');
+    }
   };
 
   // 2. Voter Landing Scene Rendering Flow (Standalone Mode)
@@ -128,7 +135,7 @@ export default function App() {
               onClick={exitPollVoterView}
               className="text-xxs font-bold text-cyan-400 hover:text-cyan-300 py-1.5 px-3 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 transition-all cursor-pointer uppercase tracking-wider"
             >
-              Exit to Creator Dashboard
+              Exit to Home
             </button>
           </div>
           <PollVoter pollId={voterPollId} />
@@ -146,7 +153,7 @@ export default function App() {
 
       {/* GLOBAL BANNER NAV */}
       <header className="sticky top-0 z-45 bg-slate-900/40 backdrop-blur-md border-b border-slate-800/50 px-4 md:px-10 py-4 flex justify-between items-center max-w-7xl mx-auto rounded-b-2xl">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 cursor-pointer" onClick={() => setCurrentSection(isAuthenticated ? 'dashboard' : 'landing')}>
           <div className="w-10 h-10 bg-gradient-to-tr from-cyan-500 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
             <VoteIcon className="w-5 h-5 text-white stroke-[2.5] animate-pulse" />
           </div>
@@ -161,88 +168,103 @@ export default function App() {
         </div>
 
         <nav className="flex items-center gap-2 relative z-10">
-          {currentSection !== 'dashboard' && (
-            <button
-              onClick={() => {
-                setCurrentSection('dashboard');
-                fetchActivePolls();
-              }}
-              className="py-2 px-4 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors cursor-pointer border border-slate-700/50"
-            >
-              Dashboard Home
-            </button>
-          )}
+          {isAuthenticated ? (
+            <>
+              {currentSection !== 'dashboard' && (
+                <button
+                  onClick={() => {
+                    setCurrentSection('dashboard');
+                    fetchActivePolls();
+                  }}
+                  className="py-2 px-4 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors cursor-pointer border border-slate-700/50"
+                >
+                  Dashboard Home
+                </button>
+              )}
 
-          {currentSection === 'dashboard' && (
-            <button
-              onClick={() => setCurrentSection('creator')}
-              className="py-2 px-5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold tracking-wider uppercase rounded-full shadow-lg shadow-indigo-500/20 cursor-pointer flex items-center gap-1.5 transition-all"
-            >
-              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-              New Poll Session
-            </button>
+              {currentSection === 'dashboard' && (
+                <button
+                  onClick={() => setCurrentSection('creator')}
+                  className="py-2 px-5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold tracking-wider uppercase rounded-full shadow-lg shadow-indigo-500/20 cursor-pointer flex items-center gap-1.5 transition-all"
+                >
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                  New Poll Session
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  localStorage.removeItem('vibepoll_admin_token');
+                  setIsAuthenticated(false);
+                  setCurrentSection('landing');
+                }}
+                className="py-2 px-4 rounded-full text-rose-400 hover:bg-rose-500/10 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Log Out
+              </button>
+            </>
+          ) : (
+            currentSection !== 'login' && (
+              <button
+                onClick={() => setCurrentSection('login')}
+                className="py-2 px-5 bg-slate-800 hover:bg-slate-700 border border-slate-700/50 text-slate-200 text-xs font-extrabold tracking-wider uppercase rounded-full shadow-lg cursor-pointer flex items-center transition-all"
+              >
+                Admin Login
+              </button>
+            )
           )}
         </nav>
       </header>
 
       {/* CORE FRAME CONTAINER FOR MULTIPLE VISUAL CHANNELS */}
       <main className="relative z-10 max-w-7xl mx-auto px-4 md:px-8 py-8">
-        {currentSection === 'creator' && (
-          <div className="space-y-6">
-            <button
-              onClick={() => setCurrentSection('dashboard')}
-              className="text-xs font-bold text-slate-400 hover:text-slate-200 flex items-center gap-1 cursor-pointer"
-            >
-              ← Back to Creator Dashboard
-            </button>
-            <PollCreate onPollCreated={handleCreatedPollTransit} />
-          </div>
-        )}
-
-        {currentSection === 'presenter' && selectedPollId && (
-          <PollPresenter 
-            pollId={selectedPollId} 
-            onBack={() => {
-              setCurrentSection('dashboard');
-              fetchActivePolls();
-            }} 
-          />
-        )}
-
-        {currentSection === 'dashboard' && (
-          <div className="space-y-8 relative z-10" id="dashboard-landing-container">
-            {/* 1. Hero Landing Welcome Area */}
-            <div className="p-8 md:p-12 rounded-3xl bg-slate-900/50 border border-slate-800/80 backdrop-blur-lg relative overflow-hidden flex flex-col lg:flex-row justify-between items-center gap-8">
+        
+        {currentSection === 'landing' && (
+          <div className="space-y-8 relative z-10" id="landing-container">
+            {/* Hero Landing Welcome Area */}
+            <div className="p-8 md:p-12 rounded-3xl bg-slate-900/50 border border-slate-800/80 backdrop-blur-lg relative overflow-hidden flex flex-col lg:flex-row justify-between items-center gap-8 shadow-2xl">
               <div className="space-y-4 max-w-xl text-left z-10">
                 <span className="px-3 py-1 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xxs font-extrabold tracking-widest uppercase rounded-full">
                   ⚡ SUPERCHARGED LIVE SSE POLLS
                 </span>
                 <h2 className="text-3xl md:text-5xl font-extrabold text-white tracking-tight leading-tight italic">
-                  Which framework are you prioritizing for <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-400 underline decoration-indigo-500/30">production apps</span> this year?
+                  Interactive real-time polling <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-400 underline decoration-indigo-500/30">for everyone.</span>
                 </h2>
                 <p className="text-slate-300 text-sm leading-relaxed">
-                  The ultimately optimized, zero-latency system featuring automatic QR code projections, real-time live progressive SVG graphs, demographic response segmenting, and instant quiz scoring.
+                  The ultimate zero-latency system featuring automatic QR code projections, real-time SVG graphs, demographic segmenting, and instant scoring.
                 </p>
-                <div className="flex flex-wrap items-center gap-3 pt-2">
-                  <button
-                    onClick={() => setCurrentSection('creator')}
-                    className="py-3 px-6 rounded-full bg-indigo-600 hover:bg-indigo-505 text-white text-xs font-bold tracking-wider uppercase transition-all shadow-lg shadow-indigo-600/40 hover:shadow-indigo-500/50 cursor-pointer"
-                  >
-                    Build First Poll Template
-                  </button>
+                
+                {/* User Join Input Area */}
+                <div className="pt-4 flex flex-col sm:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <input 
+                      type="text" 
+                      placeholder="Enter a Poll ID to Join..." 
+                      className="w-full bg-slate-950/60 border border-slate-800 text-white rounded-full py-3.5 px-6 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 font-mono text-sm shadow-inner"
+                      value={joinPollIdInput}
+                      onChange={(e) => setJoinPollIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && joinPollIdInput.trim()) {
+                          loadVoterTestingSim(joinPollIdInput.trim());
+                        }
+                      }}
+                    />
+                  </div>
                   <button
                     onClick={() => {
-                      setCurrentSection('creator');
+                      if (joinPollIdInput.trim()) {
+                        loadVoterTestingSim(joinPollIdInput.trim());
+                      }
                     }}
-                    className="py-3 px-5 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700/60 text-slate-200 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                    disabled={!joinPollIdInput.trim()}
+                    className="py-3.5 px-6 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold tracking-wider uppercase transition-all shadow-lg shadow-indigo-600/40 cursor-pointer flex items-center justify-center gap-2"
                   >
-                    <BookOpen className="w-4 h-4 text-cyan-400" />
-                    Hydrate Template Presets
+                    Join Poll <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
 
-              {/* Decorative side stats card block matching client visualization styling */}
+              {/* Decorative side stats card block */}
               <div className="p-6 rounded-3xl bg-slate-900/60 border border-slate-800 w-full lg:w-80 shadow-2xl backdrop-blur-lg space-y-4 select-none self-stretch flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between">
@@ -274,14 +296,51 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* 2. Main Dashboard Activity List */}
+        {currentSection === 'login' && (
+          <AdminLogin 
+            onLoginSuccess={() => {
+              setIsAuthenticated(true);
+              setCurrentSection('dashboard');
+              fetchActivePolls();
+            }} 
+            onCancel={() => setCurrentSection('landing')} 
+          />
+        )}
+
+        {isAuthenticated && currentSection === 'creator' && (
+          <div className="space-y-6">
+            <button
+              onClick={() => setCurrentSection('dashboard')}
+              className="text-xs font-bold text-slate-400 hover:text-slate-200 flex items-center gap-1 cursor-pointer"
+            >
+              ← Back to Creator Dashboard
+            </button>
+            <PollCreate onPollCreated={handleCreatedPollTransit} />
+          </div>
+        )}
+
+        {isAuthenticated && currentSection === 'presenter' && selectedPollId && (
+          <PollPresenter 
+            pollId={selectedPollId} 
+            onBack={() => {
+              setCurrentSection('dashboard');
+              fetchActivePolls();
+            }} 
+          />
+        )}
+
+        {isAuthenticated && currentSection === 'dashboard' && (
+          <div className="space-y-8 relative z-10" id="dashboard-admin-container">
+            {/* Main Dashboard Activity List */}
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center bg-slate-900/50 border border-slate-800 p-6 rounded-3xl backdrop-blur">
                 <div>
-                  <h3 className="text-lg font-black text-slate-100 flex items-center gap-2 italic">
+                  <h3 className="text-xl font-black text-slate-100 flex items-center gap-2 italic">
                     <Clock className="w-5 h-5 text-cyan-400" />
-                    All Live Sessions & Drafts
+                    Poll Admin Dashboard
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
                     Launch active clocks and view instant live results summary.
@@ -290,10 +349,10 @@ export default function App() {
                 
                 <button
                   onClick={fetchActivePolls}
-                  className="p-2 text-slate-400 hover:text-slate-200 border border-slate-800 bg-slate-900/60 backdrop-blur rounded-xl cursor-pointer transition-colors"
+                  className="p-3 text-slate-400 hover:text-slate-200 border border-slate-800 bg-slate-950/60 backdrop-blur rounded-xl cursor-pointer transition-colors shadow-inner"
                   title="Reload Session Data Status"
                 >
-                  <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
+                  <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
                 </button>
               </div>
 
@@ -315,18 +374,18 @@ export default function App() {
                   <div>
                     <h4 className="text-slate-300 font-bold text-sm">No Live Poll Sessions Yet</h4>
                     <p className="text-xs text-slate-500 max-w-xs mx-auto mt-1">
-                      Click the "New Poll Session" or load predefined icebreakers on the sidebar of the builder.
+                      Click the "New Poll Session" button above to start building.
                     </p>
                   </div>
                   <button
                     onClick={() => setCurrentSection('creator')}
-                    className="py-2.5 px-5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-full transition-all shadow-md cursor-pointer"
+                    className="py-2.5 px-5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-full transition-all shadow-md cursor-pointer inline-block mt-2"
                   >
                     Build a Quick Poll
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
                   {polls.map((poll) => {
                     const isDraft = poll.status === 'draft';
                     const isActive = poll.status === 'active';

@@ -759,6 +759,18 @@ app.post('/api/templates', asyncHandler(async (req: any, res: any) => {
   res.status(201).json(newTemplate);
 }));
 
+// ADMIN LOGIN
+app.post('/api/auth/login', asyncHandler(async (req: any, res: any) => {
+  const { password } = req.body;
+  const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+  
+  if (password === adminPassword) {
+    res.json({ success: true, token: 'vibepoll-admin-token-v1' });
+  } else {
+    res.status(401).json({ error: 'Invalid admin password' });
+  }
+}));
+
 // Clean up finished streams checker
 setInterval(async () => {
   try {
