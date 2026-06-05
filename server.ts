@@ -6,7 +6,6 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { createClient } from '@libsql/client/web';
 import { Poll, PollTemplate, Vote } from './src/types';
 
@@ -792,7 +791,10 @@ async function startServer() {
   await initTurso();
 
   // Vite dev server mounting or static dist serve
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1') {
+    // Dynamically import vite to avoid Vercel pulling native binaries into the serverless function
+    const viteModule = 'vite';
+    const { createServer: createViteServer } = await import(viteModule);
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
